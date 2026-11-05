@@ -1,0 +1,15 @@
+{
+  "name": "kics-cloudrag-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {"dev": "vite --host", "build": "vite build", "preview": "vite preview --host"},
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-markdown": "^9.0.3",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {"@vitejs/plugin-react": "^4.5.2", "vite": "^6.3.5"}
+}

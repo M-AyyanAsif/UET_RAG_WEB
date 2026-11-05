@@ -1,0 +1,1 @@
+"""KICS CloudRAG education platform."""

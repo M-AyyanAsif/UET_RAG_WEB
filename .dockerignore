@@ -1,0 +1,7 @@
+.env
+.git
+backups
+**/__pycache__
+**/node_modules
+**/.pytest_cache
+*.zip

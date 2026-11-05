@@ -1,0 +1,168 @@
+name: kics-cloudrag
+
+services:
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${APP_BIND_IP:-0.0.0.0}:${APP_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [cloudrag]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATA_DIR: /data
+      UPLOADS_DIR: /data/uploads
+      SQLITE_PATH: /data/cloudrag.sqlite3
+      DB_MODE: ${DB_MODE:-auto}
+      RDS_HOST: ${RDS_HOST:-}
+      RDS_PORT: ${RDS_PORT:-3306}
+      RDS_DATABASE: ${RDS_DATABASE:-cloudrag}
+      RDS_USER: ${RDS_USER:-cloudrag}
+      RDS_PASSWORD: ${RDS_PASSWORD:-}
+      RDS_REPLICA_HOST: ${RDS_REPLICA_HOST:-}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      OLLAMA_URL: http://ollama:11434
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: cloudrag_chunks
+      CHAT_MODEL: ${CHAT_MODEL:-qwen3:1.7b}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@kics.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Run bash deploy.sh first to generate credentials}
+      SESSION_SECRET: ${SESSION_SECRET:?Run bash deploy.sh first to generate credentials}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-15}
+    volumes:
+      - api_data:/data
+    depends_on:
+      ollama: {condition: service_started}
+      qdrant: {condition: service_started}
+      redis: {condition: service_started}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 45s
+      retries: 6
+    networks: [cloudrag]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+
+  ollama:
+    image: ollama/ollama:0.40.14
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "2"
+      OLLAMA_KEEP_ALIVE: 15m
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 12s
+      timeout: 8s
+      start_period: 40s
+      retries: 10
+    networks: [cloudrag]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+
+  model-init:
+    image: ollama/ollama:0.40.14
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        echo "Downloading local Ollama models (one-time; several GB)..."
+        ollama pull "$${CHAT_MODEL}"
+        ollama pull "$${EMBED_MODEL}"
+        echo "Both models are available."
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      CHAT_MODEL: ${CHAT_MODEL:-qwen3:1.7b}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+    depends_on:
+      ollama: {condition: service_healthy}
+    networks: [cloudrag]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "2"}}
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks: [cloudrag]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data:/data
+    networks: [cloudrag]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=3d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks: [cloudrag]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "2"}}
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    restart: unless-stopped
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/host/root"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+    networks: [cloudrag]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "2"}}
+
+  grafana:
+    image: grafana/grafana:13.2.5-slim
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Run bash deploy.sh first}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: 5s
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/etc/grafana/dashboards:ro
+    depends_on: [prometheus]
+    networks: [cloudrag]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "2"}}
+
+networks:
+  cloudrag:
+    driver: bridge
+
+volumes:
+  api_data:
+  ollama_data:
+  qdrant_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
