@@ -76,8 +76,11 @@ jobs:
           bash -n deploy.sh scripts/*.sh
 
       - name: Validate Docker Compose configuration
-        run: |
-          ADMIN_PASSWORD=ci_admin_pass_12345 SESSION_SECRET=ci_session_secret_12345678901234567890 GRAFANA_PASSWORD=ci_grafana_pass_12345 docker compose config --quiet ADMIN_PASSWORD=ci_admin_pass_12345 SESSION_SECRET=ci_session_secret_12345678901234567890 docker compose config --quiet
+        env:
+          ADMIN_PASSWORD: ci_admin_pass_12345
+          SESSION_SECRET: ci_session_secret_12345678901234567890
+          GRAFANA_PASSWORD: ci_grafana_pass_12345
+        run: docker compose config --quiet
 
   docker-build:
     name: Docker Image Build Validation
